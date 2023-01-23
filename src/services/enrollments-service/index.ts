@@ -1,15 +1,23 @@
-import { request } from "@/utils/request";
-import { notFoundError, requestError } from "@/errors";
-import addressRepository, { CreateAddressParams } from "@/repositories/address-repository";
-import enrollmentRepository, { CreateEnrollmentParams } from "@/repositories/enrollment-repository";
-import { exclude } from "@/utils/prisma-utils";
-import { Address, Enrollment } from "@prisma/client";
+import { request } from '@/utils/request';
+import { notFoundError, requestError } from '@/errors';
+import addressRepository, { CreateAddressParams } from '@/repositories/address-repository';
+import enrollmentRepository, { CreateEnrollmentParams } from '@/repositories/enrollment-repository';
+import { exclude } from '@/utils/prisma-utils';
+import { Address, Enrollment } from '@prisma/client';
+import cepPromise from 'cep-promise';
 
 async function getAddressFromCEP(cep: string) {
-  const result = await request.get("https://viacep.com.br/ws/37440000/json/");
-
-  if (!result.data) {
+  const result = await request.get(`https://viacep.com.br/ws/${cep}/json/`);
+ 
+   if (!result.data) {
     throw notFoundError();
+  }
+  return {
+    logradouro: result.data.logradouro,
+    complemento: result.data.complemento,
+    bairro: result.data.bairro,
+    cidade: result.data.localidade,
+    uf: result.data.uf
   }
 }
 
@@ -22,27 +30,32 @@ async function getOneWithAddressByUserId(userId: number): Promise<GetOneWithAddr
   const address = getFirstAddress(firstAddress);
 
   return {
-    ...exclude(enrollmentWithAddress, "userId", "createdAt", "updatedAt", "Address"),
+    ...exclude(enrollmentWithAddress, 'userId', 'createdAt', 'updatedAt', 'Address'),
     ...(!!address && { address }),
   };
 }
 
-type GetOneWithAddressByUserIdResult = Omit<Enrollment, "userId" | "createdAt" | "updatedAt">;
+type GetOneWithAddressByUserIdResult = Omit<Enrollment, 'userId' | 'createdAt' | 'updatedAt'>;
 
 function getFirstAddress(firstAddress: Address): GetAddressResult {
   if (!firstAddress) return null;
 
-  return exclude(firstAddress, "createdAt", "updatedAt", "enrollmentId");
+  return exclude(firstAddress, 'createdAt', 'updatedAt', 'enrollmentId');
 }
 
-type GetAddressResult = Omit<Address, "createdAt" | "updatedAt" | "enrollmentId">;
+type GetAddressResult = Omit<Address, 'createdAt' | 'updatedAt' | 'enrollmentId'>;
 
 async function createOrUpdateEnrollmentWithAddress(params: CreateOrUpdateEnrollmentWithAddress) {
-  const enrollment = exclude(params, "address");
+  const enrollment = exclude(params, 'address');
   const address = getAddressForUpsert(params.address);
 
-  //TODO - Verificar se o CEP é válido
-  const newEnrollment = await enrollmentRepository.upsert(params.userId, enrollment, exclude(enrollment, "userId"));
+  const cepValidation = await cepPromise(address.cep);
+
+  if (!cepValidation) {
+    throw new Error('CEP inválido');
+  }
+
+  const newEnrollment = await enrollmentRepository.upsert(params.userId, enrollment, exclude(enrollment, 'userId'));
 
   await addressRepository.upsert(newEnrollment.id, address, address);
 }
@@ -61,7 +74,7 @@ export type CreateOrUpdateEnrollmentWithAddress = CreateEnrollmentParams & {
 const enrollmentsService = {
   getOneWithAddressByUserId,
   createOrUpdateEnrollmentWithAddress,
-  getAddressFromCEP
+  getAddressFromCEP,
 };
 
 export default enrollmentsService;
